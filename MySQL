@@ -31,3 +31,26 @@ CREATE TABLE doctores (
     -> aparato_id INT,
     -> FOREIGN KEY (aparato_id) REFERENCES aparatos(id)
     -> );
+
+INSERT INTO codigos_acceso (codigo, tipo_usuario) VALUES (1111, 'admin');
+INSERT INTO codigos_acceso (codigo, tipo_usuario) VALUES (1234, 'paciente');
+INSERT INTO codigos_acceso (codigo, tipo_usuario) VALUES (2468, 'doctor');
+
+SELECT COUNT(*) AS total_filas FROM codigos_acceso;
+SELECT MAX(salario) AS salario_maximo FROM doctores;
+
+SELECT nombre, salario
+    -> FROM doctores
+    -> WHERE aparato_id IN (SELECT id FROM aparatos WHERE nombre = 'resonancia');
+
+CREATE VIEW vista_doctores_aparatos AS
+    -> SELECT doctores.nombre, doctores.salario, aparatos.nombre AS aparato
+    -> FROM doctores
+    -> JOIN aparatos ON doctores.aparato_id = aparatos.id;
+
+SELECT * FROM vista_doctores_aparatos;
+
+START TRANSACTION;
+INSERT INTO aparatos (nombre, estado) VALUES ('endoscopia', 'excelente');
+ROLLBACK;
+
