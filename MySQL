@@ -1,3 +1,4 @@
+--------------------------------MySQL-----------------------------------------------
 mysql -u root -p
 
 CREATE DATABASE hospital;
@@ -66,3 +67,1181 @@ CREATE TABLE consultas (
     -> SELECT consultas.nombre, consultas.consulta, aparatos.nombre AS aparato_id
     -> FROM consultas
     -> JOIN aparatos ON consultas.aparato_id = aparatos.id;
+------------------------------------------------------------------------------------------------------
+
+-----------------------------------------Server.js----------------------------------------------------
+const express = require('express');
+const session = require('express-session');
+
+const multer = require('multer');
+const xlsx = require('xlsx');
+
+const bcrypt = require('bcrypt');
+const mysql = require('mysql2');
+const app = express();
+const path = require('path');
+const bodyParser = require('body-parser');
+
+require('dotenv').config();
+
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Configuración de la sesión
+app.use(session({
+  secret: 'secretKey',
+  resave: false,
+  saveUninitialized: false,
+}));
+
+// Ruta protegida (Página principal después de iniciar sesión)
+app.get('/', requireLogin, (req, res) => {
+  res.sendFile(__dirname + '/public/index.html');
+});
+
+app.use(express.urlencoded({ extended: true }));
+
+// Servir archivos estáticos (HTML)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Ruta para que solo admin pueda ver todos los usuarios
+app.get('/ver-usuarios', requireLogin, requireRole('admin'), (req, res) => {
+  const query = 'SELECT * FROM usuarios';
+  connection.query(query, (err, results) => {
+      if (err) return res.send('Error al obtener usuarios');
+
+      let html = `
+    <html>
+    <head>
+      <link rel="stylesheet" href="/styles.css">
+      <title>Usuario</title>
+    </head>
+    <body>
+      <h1>Tipos de usuarios</h1>
+      <table>
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Tipo de usuario</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  results.forEach(usuarios => {
+    html += `
+      <tr>
+        <td>${usuarios.nombre}</td>
+        <td>${usuarios.tipo_usuario}</td>
+      </tr>
+    `;
+  });
+
+  html += `
+        </tbody>
+      </table>
+      <button onclick="window.location.href='/'">Volver</button>
+    </body>
+    </html>
+  `;
+
+      res.send(html);
+  });
+});
+
+
+// Ruta para la página principal
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+
+// Iniciar el servidor
+/*app.listen(3000, () => {
+  console.log('Servidor corriendo en http://localhost:3000');
+});
+*/
+
+// Conexión a MySQL
+const connection = mysql.createConnection({
+  host: 'localhost',
+  user: 'Administrador',
+  password: 'Hospital_general',
+  database: 'hospital'
+});
+
+connection.connect(err => {
+  if (err) throw err;
+  console.log('Conectado a la base de datos');
+});
+
+// Configuración de Middleware
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+// Configuración de puerto
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Servidor en funcionamiento en el puerto ${PORT}`));
+
+
+app.post('/registro', async (req, res) => {
+  const { username, password, codigo_acceso } = req.body;
+
+  const query = 'SELECT tipo_usuario FROM codigos_acceso WHERE codigo = ?';
+  connection.query(query, [codigo_acceso], (err, results) => {
+      if (err || results.length === 0) {
+          return res.send('Código de acceso inválido');
+      }
+
+      const tipo_usuario = results[0].tipo_usuario;
+      const hashedPassword = bcrypt.hashSync(password, 10);
+
+      const insertUser = 'INSERT INTO usuarios (nombre, tipo_usuario, password_hash) VALUES (?, ?, ?)';
+      connection.query(insertUser, [username, tipo_usuario, hashedPassword], (err) => {
+          if (err) return res.send('Error al registrar usuario');
+          res.redirect('/login.html');
+      });
+  });
+});
+
+
+app.post('/login', (req, res) => {
+  const { nombre_usuario, password } = req.body;
+
+  // Consulta para obtener el usuario y su tipo
+  const query = 'SELECT * FROM usuarios WHERE nombre = ?';
+  connection.query(query, [nombre_usuario], (err, results) => {
+      if (err) {
+          return res.send('Error al obtener el usuario');
+      }
+
+      if (results.length === 0) {
+          return res.send('Usuario no encontrado');
+      }
+
+      const user = results[0];
+
+      // Verificar la contraseña
+      const isPasswordValid = bcrypt.compareSync(password, user.password_hash);
+      if (!isPasswordValid) {
+          return res.send('Contraseña incorrecta');
+      }
+
+      // Almacenar la información del usuario en la sesión
+      req.session.user = {
+          id: user.id,
+          username: nombre_usuario,
+          tipo_usuario: user.tipo_usuario // Aquí se establece el tipo de usuario en la sesión
+      };
+
+      // Redirigir al usuario a la página principal
+      res.redirect('/');
+  });
+}); 
+
+// Ruta para obtener el tipo de usuario actual
+app.get('/tipo-usuario', requireLogin, (req, res) => {
+  res.json({ tipo_usuario: req.session.user.tipo_usuario });
+});
+
+
+
+
+
+// Cerrar sesión
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login.html');
+});
+
+
+function requireLogin(req, res, next) {
+  if (!req.session.user) {
+    return res.redirect('/login.html');
+  }
+  next();
+}
+
+connection.connect(err => {
+    if (err) {
+      console.error('Error conectando a MySQL:', err);
+      return;
+    }
+    console.log('Conexión exitosa a MySQL');
+  });
+  
+  function requireRole(...roles) {
+    return (req, res, next) => {
+        if (req.session.user && roles.includes(req.session.user.tipo_usuario)) {
+            next();
+        } else {
+            res.status(403).send('Acceso denegado');
+        }
+    };
+  }
+
+  // Ruta para guardar datos en la base de datos
+  app.post('/submit-data', requireLogin, requireRole('doctor'), (req, res) => {
+    const { name, state, ingreso } = req.body;
+  
+    const query = 'INSERT INTO aparatos (nombre, estado, fecha_ingreso) VALUES (?, ?, ?)';
+    connection.query(query, [name, state, ingreso], (err, result) => {
+      if (err) {
+        return res.send('Error al guardar los datos en la base de datos.');
+      }
+      res.send(`${name} guardado en la base de datos.`);
+    });
+  });
+
+  app.get('/menu', (req, res) => {
+    const menuItems = [
+      { nombre: 'Inicio', url: '/index.html' },
+      { nombre: 'Usuarios', url: '/usuarios.html' },
+      { nombre: 'Búsqueda', url: '/busqueda.html' }
+    ];
+    res.json(menuItems);
+  });
+
+  app.get('/buscar', (req, res) => {
+    const query = req.query.query;
+    const sql = `SELECT nombre, tipo_usuario FROM usuarios WHERE nombre LIKE ?`;
+    connection.query(sql, [`%${query}%`], (err, results) => {
+      if (err) throw err;
+      res.json(results);
+    });
+  });
+
+// Ruta para mostrar los datos de la base de datos
+app.get('/doctores', requireLogin, requireRole('admin'), (req, res) => {
+  connection.query('SELECT * FROM vista_doctores_aparatos;', (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+    <html>
+    <head>
+      <link rel="stylesheet" href="/styles.css">
+      <title>Medicos</title>
+    </head>
+    <body>
+      <h1>Medicos Registrados</h1>
+      <table>
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Salario</th>
+            <th>Aparato</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  results.forEach(doctores => {
+    html += `
+      <tr>
+        <td>${doctores.nombre}</td>
+        <td>${doctores.salario}</td>
+        <td>${doctores.aparato}</td>
+      </tr>
+    `;
+  });
+
+
+  html += `
+        </tbody>
+      </table>
+      <button onclick="window.location.href='/'">Volver</button>
+    </body>
+    </html>
+  `;
+
+    res.send(html);
+  });
+});
+
+app.post('/editar-consulta', requireLogin, requireRole('doctor'), (req, res) => {
+  const { nombre, consulta, aparato_id } = req.body;
+  const query = 'UPDATE consultas SET nombre = ?, consulta = ?, aparato_id = ? WHERE id = ?';
+  connection.query(query, [nombre, consulta, aparato_id], (err, result) => {
+    if (err) return res.send('Error al actualizar los datos de la consulta.');
+    res.send(`Consulta de ${nombre} actualizado correctamente.`);
+  });
+});
+
+app.get('/editar-consulta', requireLogin, requireRole('doctor'), (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'editar-consulta.html'));
+});
+
+app.get('/obtener-consulta/:id', requireLogin, requireRole('doctor'), (req, res) => {
+  const { id } = req.params;
+  const query = 'SELECT * FROM consultas WHERE id = ?';
+  connection.query(query, [id], (err, results) => {
+    if (err) {
+      return res.status(500).send(`
+        <link rel="stylesheet" href="styles.css">
+        <div class="error">Error al obtener la consulta</div>
+        <button onclick="window.location.href='/editar-consulta.html'">Volver</button>
+      `);
+    }
+    if (results.length === 0) {
+      return res.status(404).send(`
+        <link rel="stylesheet" href="styles.css">
+        <div class="error">Consulta no encontrada</div>
+        <button onclick="window.location.href='/editar-consulta.html'">Volver</button>
+      `);
+    }
+    res.json(results[0]);
+  });
+});
+
+const upload = multer({ dest: 'uploads/' });
+
+app.post('/upload', upload.single('excelFile'), (req, res) => {
+  const filePath = req.file.path;
+  const workbook = xlsx.readFile(filePath);
+  const sheetName = workbook.SheetNames[0];
+  const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+  data.forEach(row => {
+    const { nombre, tipo_usuario } = row;
+    const sql = `INSERT INTO usuarios (nombre, tipo_usuario) VALUES (?, ?)`;
+    connection.query(sql, [nombre, tipo_usuario], err => {
+      if (err) throw err;
+    });
+  });
+
+  res.send('<h1>Archivo cargado y datos guardados</h1><a href="/base-datos.html">Volver</a>');
+});
+
+app.get('/download', (req, res) => {
+  const sql = `SELECT * FROM usuarios`;
+  connection.query(sql, (err, results) => {
+    if (err) throw err;
+
+    const worksheet = xlsx.utils.json_to_sheet(results);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, 'Usuarios');
+
+    const filePath = path.join(__dirname, 'uploads', 'usuarios.xlsx');
+    xlsx.writeFile(workbook, filePath);
+    res.download(filePath, 'usuarios.xlsx');
+  });
+});
+
+const fs = require('fs');
+const PDFDocument = require('pdfkit')
+app.get('/downloadpdf', requireLogin, requireRole('doctor'), (req, res) => {
+  const sql = `SELECT * FROM consulta_paciente_aparato;`
+  connection.query(sql, (err, results) => {
+    if (err) {
+      console.error("Error al consultar la base de datos:", err);
+      return res.status(500).send('Error al obtener los datos.');
+    }
+ 
+    // Crear el documento PDF
+    const doc = new PDFDocument({ autoFirstPage: false }); // Desactivar la creación automática de página
+    const filePath = path.join(__dirname, 'uploads', 'rend_consultas.pdf');
+
+    // Crear el archivo PDF en el sistema de archivos
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    // Agregar una página al documento
+    doc.addPage();
+
+    // Título
+    doc.fontSize(16).text('consultas ingresadas', { align: 'center' }).moveDown();
+
+    // Subtítulo
+    doc.fontSize(12).text('Consultas ingresadas en el sistema', { align: 'center' }).moveDown(2);
+
+    // Cabecera de la tabla
+    doc.fontSize(10).text('Consultas 2024', { align: 'left' }).moveDown();
+
+    // Establecer el formato para las filas de la tabla
+    results.forEach((consultas, index) => {
+      // Cada fila con los datos de las áreas
+      doc.text( `Nombre:, ${consultas.nombre}, Consulta:, ${consultas.consulta}, Aparato, ${consultas.aparato_id}`, { align: 'left'}).moveDown();
+    });
+
+    // Finalizar el documento
+    doc.end();
+
+    // Cuando el archivo se haya generado, permitir la descarga
+    stream.on('finish', () => {
+      res.download(filePath, 'rend_protesis.pdf', (err) => {
+        if (err) {
+          console.error('Error al descargar el archivo:', err);
+          res.status(500).send('Error al descargar el archivo.');
+        } else {
+          // Eliminar el archivo temporal después de la descarga
+          fs.unlinkSync(filePath);
+        }
+      });
+    });
+  });
+});
+
+
+// Ruta para ordenar doctores por salario
+app.get('/ordenar-doctores', requireLogin, requireRole('admin'), (req, res) => {
+  const query = 'SELECT * FROM vista_doctores_aparatos ORDER BY salario DESC';
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Doctores Ordenados</title>
+      </head>
+      <body>
+        <h1>Doctores Ordenados por Salario</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Salario</th>
+              <th>Aparato</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(doctores => {
+      html += `
+        <tr>
+          <td>${doctores.nombre}</td>
+          <td>${doctores.salario}</td>
+          <td>${doctores.aparato}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+// Ruta para insertar un nuevo médico
+app.post('/insertar-medico', requireLogin, requireRole('admin'), (req, res) => {
+  const { medico_name, salario, especialidad } = req.body;
+  const query = 'INSERT INTO doctores (nombre, salario, aparato_id) VALUES (?, ?, ?)';
+
+  connection.query(query, [medico_name, salario, especialidad], (err, result) => {
+    if (err) {
+      return res.send('Error al insertar el médico.');
+    }
+    res.send(`Médico ${medico_name} guardado exitosamente.`);
+  });
+});
+
+app.post('/agendar-consulta', requireLogin, requireRole('doctor'), (req, res) => {
+  const { name, aparato, consulta } = req.body;
+  const query = 'INSERT INTO consultas (nombre, aparato_id, consulta) VALUES (?, ?, ?)';
+
+  connection.query(query, [name, aparato, consulta], (err, result) => {
+    if (err) {
+      return res.send('Error al insertar el médico.');
+    }
+    res.send(`Consulta agendada exitosamente.`);
+  });
+});
+
+// Ruta para buscar medicos según filtros
+app.get('/buscar-medicos', requireLogin, requireRole('admin'), (req, res) => {
+  const { name_search } = req.query;
+  let query = 'SELECT * FROM vista_doctores_aparatos WHERE 1=1';
+
+  if (name_search) {
+    query += ` AND nombre LIKE '%${name_search}%'`;
+  }
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Resultados de Búsqueda</title>
+      </head>
+      <body>
+        <h1>Resultados de Búsqueda</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Aparato</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(doctores => {
+      html += `
+        <tr>
+          <td>${doctores.nombre}</td>
+          <td>${doctores.aparato}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+
+// Ruta para buscar aparatos según filtros
+app.get('/aparatos', requireLogin, requireRole('doctor'), (req, res) => {
+
+  let query = 'SELECT * FROM aparatos;'
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Aparatos</title>
+      </head>
+      <body>
+        <h1>Aparatos</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Aparato</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(aparatos => {
+      html += `
+        <tr>
+          <td>${aparatos.nombre}</td>
+          <td>${aparatos.estado}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+
+// Ruta para buscar consultas sin filtros
+app.get('/consultas', requireLogin, requireRole('doctor'), (req, res) => {
+  let query = 'SELECT * FROM consulta_paciente_aparato WHERE 1=1';
+
+  connection.query(query, (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Consultas</title>
+      </head>
+      <body>
+        <h1>Consultas agendadas</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Fecha</th>
+              <th>Aparato</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(consultas => {
+      html += `
+        <tr>
+          <td>${consultas.nombre}</td>
+          <td>${consultas.consulta}</td>
+          <td>${consultas.aparato_id}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+        <button onclick="window.location.href='/downloadpdf'">Descargar consultas</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+timezone: 'America/Tijuana'
+------------------------------------------------------------------------------------------------------------
+-------------------------------------------------index.html-------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="styles.css">
+  <title>Gestión de Imagenologia</title>
+</head>
+<body>
+  
+  <h2>Bienvenido a la Gestión de Imagenologia</h2>
+  <div id="navbar"></div>
+
+  <script>
+      // Insertar el contenido de navbar.html en el elemento con id "navbar"
+      fetch('/navbar.html')
+          .then(response => response.text())
+          .then(data => {
+              document.getElementById('navbar').innerHTML = data;
+          })
+          .catch(error => console.error('Error cargando el navbar:', error));
+  </script>
+
+<script>
+  // Solicitar el tipo de usuario y ajustar el menú en función de este
+  fetch('/tipo-usuario')
+      .then(response => response.json())
+      .then(data => {
+          const menu = document.getElementById('menu');
+          const tipoUsuario = data.tipo_usuario;
+
+          // Agregar opciones de menú según el tipo de usuario
+          if (tipoUsuario === 'admin') {
+              menu.innerHTML += '<li><a href="/ver-usuarios">Ver Usuarios</a></li>';
+              menu.innerHTML += '<li><a href="/busqueda.html">Busqueda</a></li>';
+              menu.innerHTML += '<li><a href="/doctores">Doctores</a></li>';
+              menu.innerHTML += '<li><a href="/base-datos.html">Base de datos</a></li>';
+          } else if (tipoUsuario === 'doctor') {
+              menu.innerHTML += '<li><a href="/consulta.html">Agendar consulta</a></li>';
+              menu.innerHTML += '<li><a href="/editar-consulta.html">Editar consultas</a></li>';
+              menu.innerHTML += '<li><a href="/consultas">Consultas</a></li>';
+              menu.innerHTML += '<li><a href="/aparatos">Aparatos</a></li>';
+          }
+
+          // Opción de cerrar sesión para todos los tipos de usuario
+          menu.innerHTML += '<li><a href="/logout">Cerrar Sesión</a></li>';
+      })
+      .catch(error => console.error('Error obteniendo el tipo de usuario:', error));
+</script>
+
+
+  <h1>Bienvenido a la Gestión de Pacientes</h1>
+  <p><b>Esta es una página básica para administrar pacientes y sus signos vitales.</b></p>
+  <form action="/submit-data" method="POST">
+    <label for="name">Nombre del aparato:</label>
+    <input type="text" id="name" name="name">
+    <label for="age">Estado:</label>
+    <input type="text" id="state" name="state">
+    <label for="heart-rate">Fecha de ingreso:</label>
+    <input type="date" id="ingreso" name="ingreso">
+    <button type="submit">Guardar</button>
+  </form>
+
+  <h2>Registrar Médico</h2>
+  <form action="/insertar-medico" method="POST">
+    <label for="medico-name">Nombre del médico:</label>
+    <input type="text" id="medico-name" name="medico_name">
+    <label for="salario">Salario:</label>
+    <input type="text" id="salario" name="salario">
+    <label for="especialidad">ID del aparato:</label>
+    <input type="text" id="especialidad" name="especialidad">
+    <button type="submit">Guardar Médico</button>
+  </form>
+
+<h2>Buscar Médicos</h2>
+  <form action="/buscar-medicos" method="GET">
+    <label for="name-search">Nombre del médico:</label>
+    <input type="text" id="name-search" name="name_search">
+    <button type="submit">Buscar</button>
+  </form>
+  
+  <button onclick="window.location.href='/doctores'">Ver doctores Guardados</button>
+  <button onclick="window.location.href='/ordenar-doctores'">Ordenar por Salario</button>
+  <button onclick="window.location.href='/ver-usuarios'">Ver usuarios</button>
+</body>
+</html>
+--------------------------------------------------------------------------------------------------------------------
+---------------------------------------------login.html-------------------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <title>Iniciar Sesión</title>
+</head>
+<body>
+  <h2>Iniciar Sesión</h2>
+  <form action="/login" method="POST">
+    <label for="nombre_usuario">Nombre de Usuario:</label>
+    <input type="text" id="nombre_usuario" name="nombre_usuario" required>
+    <br>
+    <label for="password">Contraseña:</label>
+    <input type="password" id="password" name="password" required>
+    <br>
+    <button type="submit">Iniciar Sesión</button>
+  </form>
+  <p>¿No tienes cuenta? <a href="/registro.html">Regístrate aquí</a></p>
+</body>
+</html>
+--------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------registro.html------------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <title>Registro de Usuario</title>
+</head>
+<body>
+  <h2>Registro de Usuario</h2>
+  <form action="/registro" method="POST">
+    <label for="username">Nombre de usuario:</label>
+    <input type="text" id="username" name="username" required>
+    <label for="codigo_acceso">Codigo de acceso:</label>
+    <input type="text" id="codigo_acceso" name="codigo_acceso" required>
+    <label for="password">Contraseña:</label>
+    <input type="password" id="password" name="password" required>
+    <button type="submit">Registrarse</button>
+</form>
+  <p>¿Ya tienes cuenta? <a href="/login.html">Inicia sesión</a></p>
+
+</body>
+</html>
+------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------navbar.html--------------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base de Datos</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Cargar Base de Datos desde Excel</h1>
+  <form action="/upload" method="POST" enctype="multipart/form-data">
+    <input type="file" name="excelFile" accept=".xlsx" />
+    <button type="submit">Subir Archivo</button>
+  </form>
+  <button onclick="window.location.href='/download'">Descargar Base de Datos</button>
+  <button onclick="window.location.href='/'">Volver</button>
+</body>
+</html>
+----------------------------------------------------------------------------------------------------------------
+-------------------------------------------doctores.html---------------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doctores</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Cargar Doctores desde Excel</h1>
+  <form action="/upload" method="POST" enctype="multipart/form-data">
+    <input type="file" name="excelFile" accept=".xlsx" />
+    <button type="submit">Subir Archivo</button>
+  </form>
+  <button onclick="window.location.href='/download-doc'">Descargar Equipos</button>
+</body>
+</html>
+--------------------------------------------------------------------------------------------------------------
+--------------------------------------------busqueda.html-----------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Búsqueda en Tiempo Real</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="navbar"></div>
+  <h1>Búsqueda en Tiempo Real</h1>
+  <input type="text" id="search" placeholder="Buscar usuario..." />
+  <ul id="results"></ul>
+
+  <script src="navbar.html"></script>
+  <script>
+    document.getElementById('search').addEventListener('keyup', function() {
+      const query = this.value;
+      fetch(`/buscar?query=${query}`)
+        .then(res => res.json())
+        .then(data => {
+          const results = document.getElementById('results');
+          results.innerHTML = '';
+          data.forEach(usuarios => {
+            const li = document.createElement('li');
+            li.textContent = `${usuarios.nombre} (${usuarios.tipo_usuario})`;
+            results.appendChild(li);
+          });
+        });
+    });
+  </script>
+</body>
+</html>
+-----------------------------------------------------------------------------------------------------------------
+--------------------------------------------consulta.html--------------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agendar consulta</title>
+</head>
+<body>
+  <h1>Agenda tu consulta</h1>
+  <form action="/agendar-consulta" method="POST">
+    <label for="name">Nombre del paciente:</label>
+    <input type="text" id="name" name="name">
+    <label for="aparato">aparato:</label>
+    <input type="number" id="aparato" name="aparato">
+    <label for="consulta">Fecha de consulta:</label>
+    <input type="date" id="consulta" name="consulta">
+    <button type="submit">Guardar</button>
+  </form>
+</body>
+</html>
+---------------------------------------------------------------------------------------------------------------
+-----------------------------------------------editar-consulta.html--------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Editar Consulta</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <h1>Editar Paciente</h1>
+  <form id="buscarConsultaForm">
+    <label for="consulta-id">ID de la Consulta:</label>
+    <input type="text" id="consulta-id" required>
+    <button type="button" onclick="buscarConsulta()">Buscar</button>
+  </form>
+  
+  <form id="editarConsultaForm" style="display: none;" method="POST" action="/editar-consulta">
+    <input type="hidden" id="consulta-id-hidden" name="id">
+    
+    <label for="nombre">Nombre:</label>
+    <input type="text" id="nombre" name="nombre" required>
+
+    <label for="consulta">Consulta:</label>
+    <input type="date" id="consulta" name="consulta" required>
+
+    <label for="aparato-id">ID del Aparato:</label>
+    <input type="text" id="aparato-id" name="aparato-id" required>
+
+    <button type="submit">Guardar Cambios</button>
+    <button type="button" onclick="eliminarPaciente()">Eliminar Consulta</button>
+  </form>
+
+  <script>
+
+    function buscarConsulta() {
+      const consultaId = document.getElementById('consulta-id').value;
+      fetch(`/obtener-consulta/${consultaId}`)
+        .then(response => {
+          if (!response.ok) throw new Error('Consulta no encontrado');
+          return response.json();
+        })
+        .then(data => {
+          document.getElementById('editarConsultaForm').style.display = 'block';
+          document.getElementById('consulta-id-hidden').value = data.id;
+          document.getElementById('nombre').value = data.nombre;
+          document.getElementById('consulta').value = data.consulta;
+          document.getElementById('aparato_id').value = data.aparato_id;
+        })
+        .catch(error => alert(error.message));
+    }
+
+    function eliminarConsulta() {
+      const consultaId = document.getElementById('consulta-id-hidden').value;
+      if (confirm('¿Estás seguro de que deseas eliminar esta consulta?')) {
+        fetch(`/eliminar-consulta/${consultaId}`, {
+          method: 'DELETE'
+        })
+        .then(response => {
+          if (response.ok) {
+            alert('Consulta eliminado correctamente.');
+            window.location.href = '/consulta.html';
+          } else {
+            alert('Error al eliminar la consulta.');
+          }
+        })
+        .catch(error => console.error('Error al eliminar la consulta:', error));
+      }
+    }
+  </script>
+
+  <button onclick="window.location.href='/'">Volver</button>
+</body>
+</html>
+------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------base-datos.html----------------------------------------------------
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Base de Datos</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Cargar Base de Datos desde Excel</h1>
+  <form action="/upload" method="POST" enctype="multipart/form-data">
+    <input type="file" name="excelFile" accept=".xlsx" />
+    <button type="submit">Subir Archivo</button>
+  </form>
+  <button onclick="window.location.href='/download'">Descargar Base de Datos</button>
+  <button onclick="window.location.href='/'">Volver</button>
+</body>
+</html>
+---------------------------------------------------------------------------------------------------------------
+------------------------------------------styles.css-----------------------------------------------------------
+/* Estilo general para el cuerpo */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f7fc;
+  margin: 0;
+  padding: 0;
+  color: #333;
+}
+
+/* Encabezado principal */
+h1 {
+  color: #2c3e50;
+  text-align: center;
+  margin-top: 20px;
+  font-size: 2.5em;
+}
+
+/* Contenedor del formulario */
+form {
+  width: 100%;
+  max-width: 400px;
+  margin: 30px auto;
+  padding: 20px;
+  background-color: #ffffff;
+  border-radius: 10px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #555;
+}
+
+input {
+  width: 93.5%;
+  padding: 10px;
+  margin-bottom: 15px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  font-size: 1em;
+  transition: border-color 0.3s;
+}
+
+input:focus {
+  border-color: #3498db;
+  outline: none;
+}
+
+button {
+  width: 100%;
+  padding: 12px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  font-size: 1em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+button:hover {
+  background-color: #2980b9;
+}
+
+/* Estilos para tablas */
+table {
+  width: 90%;
+  margin: 30px auto;
+  border-collapse: collapse;
+  background-color: #ffffff;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+th, td {
+  padding: 15px;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+th {
+  background-color: #2c3e50;
+  color: white;
+  font-weight: 600;
+}
+
+tr:hover {
+  background-color: #f2f2f2;
+}
+
+/* Estilos para la barra de navegación */
+nav {
+  background-color: #2c3e50;
+  color: white;
+  padding: 15px 0;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+nav ul li {
+  margin: 5px 15px;
+}
+
+nav ul li a {
+  color: white;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 1em;
+  padding: 10px 15px;
+  transition: background-color 0.3s;
+  border-radius: 5px;
+}
+
+nav ul li a:hover {
+  background-color: #34495e;
+}
+---------------------------------------------------------------------------------------------------------------
+------------------------------------------ .env ---------------------------------------------------------------
+PORT=3000
+DB_HOST=localhost
+DB_USER=Administrador
+DB_PASSWORD=Hospital_general
+DB_NAME=hospital
+
+const mysql = require('mysql');
+const express = require('express');
+require('dotenv').config(); // Cargar las variables de entorno
+
+// Configuración de la base de datos
+const connection = mysql.createConnection({
+  host: process.env.DB_HOST,       // Host desde .env
+  user: process.env.DB_USER,       // Usuario desde .env
+  password: process.env.DB_PASS,   // Contraseña desde .env
+  database: process.env.DB_NAME    // Nombre de la base de datos desde .env
+});
+
+// Conectar a la base de datos
+connection.connect(err => {
+  if (err) {
+    console.error('Error al conectar con la base de datos:', err);
+    return;
+  }
+  console.log('Conexión exitosa a la base de datos');
+});
+
+// Configuración del servidor
+const app = express();
+const port = process.env.PORT || 3000; // Puerto desde .env o valor por defecto
+
+app.listen(port, () => {
+  console.log(`Servidor corriendo en el puerto ${port}`);
+});
+--------------------------------------------------------------------------------------------------------------------
+--------------------------------------------nodemon.json------------------------------------------------------------
+{
+    "watch": ["server.js"],
+    "ext": "js,json",
+    "ignore": ["node_modules"],
+    "exec": "node server.js"
+  }
+-------------------------------------------------------------------------------------------------------------------
+---------------------------------------------package.json----------------------------------------------------------
+{
+  "name": "gestion-pacientes",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "nodemon"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "audit": "^0.0.6",
+    "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1",
+    "fix": "^0.0.6",
+    "fs": "^0.0.1-security",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.11.5",
+    "nodemon": "^3.1.7",
+    "pdfkit": "^0.15.2",
+    "xlsx": "^0.18.5"
+  },
+  "description": ""
+}
+-----------------------------------------------------------------------------------------------------------------
